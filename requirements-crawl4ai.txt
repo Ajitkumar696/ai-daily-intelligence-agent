@@ -1,0 +1,2 @@
+# Optional browser-based article extraction; install only when desired.
+crawl4ai==0.9.5

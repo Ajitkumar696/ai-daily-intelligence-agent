@@ -218,3 +218,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-specific generated files
+output/
+
+# Environment and secrets
+.env.*
+!.env.example
+
+# VS Code
+.vscode/

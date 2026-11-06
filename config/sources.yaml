@@ -1,0 +1,119 @@
+# AI Daily Intelligence Agent — Source Registry
+#
+# Supported types:
+#   rss           — standard RSS/Atom feed (feedparser)
+#   api           — Hugging Face Papers API
+#   sitemap       — sitemap-based discovery + per-article extraction
+#   api_hf_spaces — Hugging Face Spaces trending API
+#   twitter       — Official Twitter API v2 (requires TWITTER_BEARER_TOKEN in .env)
+#   producthunt   — Official Product Hunt GraphQL API (requires PRODUCT_HUNT_DEVELOPER_TOKEN in .env)
+#
+# content_type classifies the content produced by each source:
+#   article | newsletter | podcast | paper | space | video | social | launch
+#
+# Article extraction (extract_articles: true) is opt-in and valid for
+# rss and sitemap sources. Extraction is skipped when robots.txt disallows
+# it; always confirm the site's terms before enabling.
+
+sources:
+  # ── Core AI Labs & Research ─────────────────────────────────────────────
+  - name: OpenAI
+    type: rss
+    url: https://openai.com/news/rss.xml
+    max_articles: 20
+    extract_articles: true
+    content_type: article
+
+  - name: Google DeepMind
+    type: rss
+    url: https://deepmind.google/blog/rss.xml
+    max_articles: 20
+    extract_articles: true
+    crawl4ai_fallback: true
+    crawl4ai_allowed_domains:
+      - deepmind.google
+    content_type: article
+
+  - name: Anthropic News
+    type: sitemap
+    url: https://www.anthropic.com/sitemap.xml
+    max_articles: 20
+    extract_articles: true
+    content_type: article
+
+  - name: Hugging Face Papers
+    type: api
+    url: https://huggingface.co/api/daily_papers
+    max_articles: 20
+    content_type: paper
+
+  - name: Hugging Face Blog
+    type: rss
+    url: https://huggingface.co/blog/feed.xml
+    max_articles: 20
+    content_type: article
+
+  # ── Tech Media & Community ──────────────────────────────────────────────
+  - name: Inc42
+    type: rss
+    url: https://inc42.com/feed/
+    max_articles: 20
+    extract_articles: true
+    content_type: article
+
+  - name: Latent Space
+    type: rss
+    url: https://podcast.latent.space/feed.xml
+    max_articles: 20
+    content_type: podcast
+
+  # ── Newsletters (including Substack publications) ────────────────────────
+  - name: TLDR AI
+    type: rss
+    url: https://tldr.tech/api/rss/ai
+    max_articles: 20
+    content_type: newsletter
+
+  - name: Lenny's Newsletter
+    type: rss
+    url: https://lenny.substack.com/feed
+    max_articles: 10
+    content_type: newsletter
+
+  # Example of adding further Substack publications:
+  # Any publication hosted on Substack exposes an RSS feed at <subdomain>.substack.com/feed
+  - name: Interconnects AI
+    type: rss
+    url: https://www.interconnects.ai/feed
+    max_articles: 10
+    content_type: newsletter
+
+  # ── Video & Channels ────────────────────────────────────────────────────
+  # Canonical YouTube channel ID for @aiDotEngineer verified live: UCLKPca3kwwd-B59HNr-_lvA
+  - name: AI Engineer
+    type: rss
+    url: https://www.youtube.com/feeds/videos.xml?channel_id=UCLKPca3kwwd-B59HNr-_lvA
+    max_articles: 10
+    content_type: video
+
+  # ── Demos & Spaces ──────────────────────────────────────────────────────
+  - name: Hugging Face Spaces
+    type: api_hf_spaces
+    url: https://huggingface.co/api/spaces
+    max_articles: 20
+    content_type: space
+
+  # ── Official Authenticated Integrations (Require API tokens in .env) ────
+  # Official Twitter API v2 (requires TWITTER_BEARER_TOKEN in .env)
+  - name: X / Twitter
+    type: twitter
+    url: https://api.twitter.com/2/tweets/search/recent
+    max_articles: 10
+    content_type: social
+
+  # Official Product Hunt GraphQL API (requires PRODUCT_HUNT_DEVELOPER_TOKEN in .env)
+  - name: Product Hunt
+    type: producthunt
+    url: https://api.producthunt.com/v2/api/graphql
+    max_articles: 20
+    content_type: launch
