@@ -1,7 +1,7 @@
 
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from src.collectors.anthropic_collector import collect_anthropic_news
 from src.collectors.article_extractor import extract_article_content
@@ -29,6 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 OUTPUT_DIR = PROJECT_ROOT / "output"
 OUTPUT_FILE = OUTPUT_DIR / "updates.json"
+COLLECTION_REPORT_FILE = OUTPUT_DIR / "collection_report.json"
 
 
 @dataclass
@@ -36,6 +37,7 @@ class PipelineResult:
     source_results: List[CollectionResult]
     saved_articles: List[Dict]
     research_groups: List[Dict]
+    collection_report: Optional[Dict] = None
 
 
 def collect_all_sources(sources=None):
@@ -196,11 +198,57 @@ def print_source_summary(results):
             print(f"  WARNING: {warning}")
 
 
-def run_pipeline(sources=None, output_file=None, history_file=None):
+def build_collection_report(results, sources=None):
+    """Serialize an independent outcome for every configured collector."""
+    configs = {source.name: source for source in (sources or [])}
+    entries = []
+    for result in results:
+        articles = []
+        for article in result.articles:
+            if not isinstance(article, dict):
+                continue
+            extracted = article.get("extracted_content")
+            if isinstance(extracted, dict):
+                extracted = extracted.get("full_text") or ""
+            summary = article.get("summary") or extracted or ""
+            articles.append({
+                "publisher": article.get("publisher") or article.get("source") or result.source,
+                "title": article.get("title") or "",
+                "url": article.get("url") or "",
+                "canonical_url": article.get("canonical_url") or "",
+                "published": article.get("published") or "",
+                "content_source_type": article.get("content_source_type") or "metadata_only",
+                "summary": summary[:1600] if isinstance(summary, str) else "",
+            })
+        entries.append({
+            "source": result.source,
+            "collector_type": getattr(configs.get(result.source), "type", "unknown"),
+            "status": result.status.value,
+            "article_count": len(result.articles),
+            "error": result.error,
+            "articles": articles,
+        })
+    return {
+        "sources": entries,
+        "configured_count": len(entries),
+        "successful_count": sum(item["status"] == "SUCCESS" for item in entries),
+        "failed_count": sum(item["status"] == "FAILED" for item in entries),
+        "zero_article_count": sum(item["article_count"] == 0 for item in entries),
+    }
+
+
+def run_pipeline(sources=None, output_file=None, history_file=None,
+                 collection_report_file=None):
     """Collect, filter, save, then record only successfully saved articles."""
 
     source_results = collect_all_sources(sources)
     print_source_summary(source_results)
+    configured_sources = sources if sources is not None else load_sources_config()
+    collection_report = build_collection_report(source_results, configured_sources)
+    report_path = collection_report_file
+    if report_path is None and output_file is not None:
+        report_path = Path(output_file).with_name("collection_report.json")
+    atomic_write_json(report_path or COLLECTION_REPORT_FILE, collection_report)
 
     collected_articles = [
         article
@@ -220,7 +268,8 @@ def run_pipeline(sources=None, output_file=None, history_file=None):
     return PipelineResult(
         source_results=source_results,
         saved_articles=new_articles,
-        research_groups=group_related_articles(new_articles)
+        research_groups=group_related_articles(new_articles),
+        collection_report=collection_report
     )
 
 

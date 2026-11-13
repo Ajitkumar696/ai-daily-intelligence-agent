@@ -17,7 +17,8 @@ def run_research_report(
     report_dir=None,
     max_topics=None,
     client=None,
-    cache=None
+    cache=None,
+    collection_report=None
 ):
     """Generate one combined daily programme, persist it, and render one PDF."""
 
@@ -29,7 +30,8 @@ def run_research_report(
         output_file=brief_file or DEFAULT_DAILY_OUTPUT_FILE,
         max_topics=limit,
         client=client,
-        cache=cache
+        cache=cache,
+        collection_report=collection_report
     )
     try:
         pdf_path = generate_pdf_report(

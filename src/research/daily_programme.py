@@ -2246,4 +2246,6 @@ def validate_daily_programme_record(record):
         }
     validated["programme_status"] = "SUCCESS"
     validated["source_groups"] = record["source_groups"]
+    if isinstance(record.get("collection_report"), dict):
+        validated["collection_report"] = record["collection_report"]
     return validated

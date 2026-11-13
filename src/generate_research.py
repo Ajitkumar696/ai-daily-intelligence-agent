@@ -21,7 +21,8 @@ def run_research(
     max_topics=0,
     client=None,
     cache=None,
-    programme_date=None
+    programme_date=None,
+    collection_report=None
 ):
     articles = load_articles(input_file or DEFAULT_INPUT_FILE)
     groups = group_related_articles(articles)
@@ -33,6 +34,8 @@ def run_research(
         cache=cache,
         programme_date=programme_date
     )
+    if collection_report is not None:
+        programme["collection_report"] = collection_report
     output = (
         Path(output_file)
         if output_file is not None

@@ -53,11 +53,13 @@ def test_article_extraction_enabled_sources():
         s.name for s in sources if s.extract_articles
     }
     assert sources_with_extraction == {
-        "OpenAI",
-        "Google DeepMind",
-        "Anthropic News",
-        "Inc42",
-    }
+    "OpenAI",
+    "Google DeepMind",
+    "Anthropic News",
+    "Inc42",
+    "Hugging Face Blog",
+    "TLDR AI",
+}
 
 
 def test_only_rss_and_sitemap_sources_have_extraction():

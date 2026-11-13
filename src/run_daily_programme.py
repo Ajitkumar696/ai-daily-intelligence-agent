@@ -35,7 +35,8 @@ def run_daily_programme(
         report_dir=report_dir,
         max_topics=max_topics,
         client=client,
-        cache=cache
+        cache=cache,
+        collection_report=getattr(collection, "collection_report", None)
     )
 
 

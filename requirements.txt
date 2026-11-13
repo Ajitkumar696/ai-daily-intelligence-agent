@@ -7,3 +7,8 @@ pillow==13.0.0
 PyYAML==6.0.3
 python-dotenv==1.2.4
 pytest==9.2.0
+tzdata==2026.6
+higgsfield-client==0.2.0
+fastapi==0.162.2
+uvicorn==0.54.0
+httpx==0.28.1

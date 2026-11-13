@@ -1,0 +1,119 @@
+{
+  "name": "AI Daily Intelligence - Daily Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 7,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "09d4b710-cc76-4bc9-80e7-7e76d4f7c9f1",
+      "name": "Every day at 07:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "cd /d \"C:\\Users\\Ajit Kumar\\OneDrive\\Desktop\\coading ninja\\newproject\\mldl\\ai-daily-intelligence-agent\" && .venv\\Scripts\\python.exe run_daily_pipeline.py"
+      },
+      "id": "925747e9-c05d-4208-ae11-0d0ed7febf1f",
+      "name": "Run daily pipeline",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first()?.json ?? {};\nconst stdout = String(item.stdout ?? '');\nconst stderr = String(item.stderr ?? '');\nconst lines = stdout.split(/\\r?\\n/).filter(line => line.trim());\ntry {\n  if (!lines.length) throw new Error('stdout was empty');\n  return [{ json: JSON.parse(lines[lines.length - 1]) }];\n} catch (error) {\n  const tail = stderr.split(/\\r?\\n/).slice(-12).join('\\n').slice(-2000);\n  return [{ json: { ok: false, stage: 'parse', error: tail || String(error.message || error) } }];\n}"
+      },
+      "id": "1a853a2b-f357-4e15-a10d-507468fa36d2",
+      "name": "Parse pipeline result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9d998c8e-b66b-4ad6-8300-306d175a00c8",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "69187d90-384d-4d4f-a968-64d3b0864a80",
+      "name": "Pipeline succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {},
+      "id": "f35c616f-c9bd-46b3-bc2a-7093c499d2a3",
+      "name": "On success - send PDF and videos here",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1200, 200]
+    },
+    {
+      "parameters": {},
+      "id": "f34e32fd-84f6-4c52-ad77-d8f2822555ef",
+      "name": "On failure - send alert here",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1200, 400]
+    }
+  ],
+  "connections": {
+    "Every day at 07:00": {
+      "main": [[{"node": "Run daily pipeline", "type": "main", "index": 0}]]
+    },
+    "Run daily pipeline": {
+      "main": [[{"node": "Parse pipeline result", "type": "main", "index": 0}]]
+    },
+    "Parse pipeline result": {
+      "main": [[{"node": "Pipeline succeeded?", "type": "main", "index": 0}]]
+    },
+    "Pipeline succeeded?": {
+      "main": [
+        [{"node": "On success - send PDF and videos here", "type": "main", "index": 0}],
+        [{"node": "On failure - send alert here", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "versionId": "99281858-b5ba-4f4f-b0ee-019c33831abd",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "tags": []
+}

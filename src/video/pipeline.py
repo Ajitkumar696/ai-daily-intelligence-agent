@@ -15,8 +15,62 @@ from typing import Any, Callable, Dict, List, Optional
 from . import audio_mix, render, tts
 from .config import VideoConfig, default_image_dir
 from .planner import apply_scene_durations, plan_video_scenes
-from .timing import Cue, build_cues, cues_to_srt, shift_words
+from .timing import Cue, WordTiming, build_cues, cues_to_srt, shift_words
 from .visuals import build_scene_visuals
+
+THREE_MINUTE_DURATION_TOLERANCE_SECONDS = 15
+
+
+def validate_target_duration(plan: Dict[str, Any], actual_seconds: float) -> None:
+    """Reject a three-minute package whose measured narration misses its target."""
+    if plan.get("programme_type") != "three_minute":
+        return
+    target = float(plan.get("target_duration_seconds") or 180)
+    if abs(float(actual_seconds) - target) > THREE_MINUTE_DURATION_TOLERANCE_SECONDS:
+        raise render.RenderError(
+            f"Three-minute narration renders to {actual_seconds:.1f}s; "
+            f"target is about {target:.0f}s (tolerance "
+            f"{THREE_MINUTE_DURATION_TOLERANCE_SECONDS}s). Shorten the script "
+            "or adjust the local voice rate before rendering."
+        )
+
+
+def fit_three_minute_audio(audio: List[tts.SceneAudio], config: VideoConfig,
+                           work: Path, ffmpeg: str,
+                           target_seconds: float = 180) -> List[tts.SceneAudio]:
+    """Tempo-fit local scene WAVs to target without changing narration text."""
+    fixed_seconds = config.bumper_seconds + config.closing_seconds
+    scene_seconds = sum(clip.duration for clip in audio)
+    actual_seconds = scene_seconds + fixed_seconds
+    if abs(actual_seconds - target_seconds) <= THREE_MINUTE_DURATION_TOLERANCE_SECONDS:
+        return audio
+
+    target_scene_seconds = target_seconds - fixed_seconds
+    tempo = scene_seconds / target_scene_seconds if target_scene_seconds > 0 else 0
+    if not 0.75 <= tempo <= 1.33:
+        raise render.RenderError(
+            f"Three-minute narration needs an unsupported audio tempo "
+            f"({tempo:.2f}x) to fit {target_seconds:.0f}s. Shorten the script "
+            "or choose a voice with a suitable speaking rate."
+        )
+
+    fitted: List[tts.SceneAudio] = []
+    for index, clip in enumerate(audio, 1):
+        path = Path(work) / "duration_fitted" / f"scene_{index:02d}.wav"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", str(clip.path),
+            "-filter:a", f"atempo={tempo:.6f}", "-acodec", "pcm_s16le",
+            "-ar", str(tts.SAMPLE_RATE), "-ac", "1", str(path),
+        ]
+        render.run_ffmpeg(command, "Three-minute narration tempo adjustment")
+        words = [WordTiming(word.word, word.start / tempo, word.end / tempo)
+                 for word in clip.words]
+        fitted.append(tts.SceneAudio(
+            path=path, duration=tts.wav_seconds(path), words=words,
+            provider=clip.provider, estimated_timing=clip.estimated_timing,
+        ))
+    return fitted
 
 
 def build_segments(plan: Dict[str, Any], audio: List[tts.SceneAudio], config: VideoConfig):
@@ -64,6 +118,7 @@ def run_pipeline(
 ) -> Dict[str, Any]:
     from .renderer import DEFAULT_VIDEO_DIR  # late import: renderer imports this module lazily
     from .motion import MotionRenderer
+    from . import higgsfield
     from PIL import Image
 
     config = config or VideoConfig.from_env()
@@ -89,6 +144,25 @@ def run_pipeline(
     search_dirs = [Path(config.image_dir)] if config.image_dir else []
     search_dirs.append(default_image_dir())
     visuals = build_scene_visuals(plan, plan.get("stories", []), search_dirs)
+    if programme_type == "three_minute":
+        log(
+            "Higgsfield API key configured: "
+            f"{'yes' if higgsfield.credentials_configured(config) else 'no'}; "
+            f"generation enabled: {'yes' if config.higgsfield_enabled else 'no'}"
+        )
+        clips, clip_warnings = higgsfield.generate_story_clips(plan, config)
+        warnings.extend(clip_warnings)
+        for index, clip in enumerate(clips):
+            if clip is None:
+                continue
+            frame_dir = higgsfield.extract_clip_frames(
+                ffmpeg, clip, work / "higgsfield_frames" / f"scene_{index + 1:03d}", config.fps
+            )
+            if frame_dir:
+                visuals[index]["clip_frames_dir"] = str(frame_dir)
+                visuals[index]["clip_path"] = str(clip)
+            else:
+                warnings.append("A cached Higgsfield clip could not be decoded; using local visuals.")
 
     # 4. narration audio: real speech or a clear error (never a placeholder tone)
     log(f"[1/5] Generating narration for {len(plan['scenes'])} scenes...")
@@ -97,12 +171,25 @@ def run_pipeline(
     audio: List[tts.SceneAudio] = speech["audio"]
     provider = speech["provider"]
     warnings.extend(speech["warnings"])
+    if programme_type == "three_minute":
+        original_duration = sum(clip.duration for clip in audio) + config.bumper_seconds + config.closing_seconds
+        audio = fit_three_minute_audio(
+            audio, config, work, ffmpeg,
+            float(plan.get("target_duration_seconds") or 180),
+        )
+        if audio and audio[0].path.parent.name == "duration_fitted":
+            warnings.append(
+                f"Narration audio tempo adjusted locally to fit the "
+                f"{plan.get('target_duration_seconds', 180)}s three-minute target "
+                f"(measured before adjustment: {original_duration:.1f}s)."
+            )
     if any(a.estimated_timing for a in audio):
         warnings.append("Word highlight timing is estimated from each scene's measured audio "
                         "length (this voice provides no word timestamps).")
 
     # 5. timeline + subtitles
     segments, _, total = build_segments(plan, audio, config)
+    validate_target_duration(plan, total)
     srt_path = target / "subtitles.srt"
     srt_path.write_text(plan["subtitles_srt"], encoding="utf-8")
     voiceover_path = target / "voiceover.wav"
@@ -111,7 +198,7 @@ def run_pipeline(
     # 6. animated scene assets (preview stills come from the real animated renderer)
     credit = ("Voice: ElevenLabs (elevenlabs.io)" if provider == "ElevenLabs"
               else f"Voice: {provider}")
-    motion = MotionRenderer(plan, visuals, segments, total, voice_credit=credit)
+    motion = MotionRenderer(plan, visuals, segments, total, voice_credit=credit, fps=config.fps)
     frame_paths: List[Path] = []
     for i, scene in enumerate(plan["scenes"]):
         seg = segments[i + 1]
@@ -121,7 +208,13 @@ def run_pipeline(
         frame_paths.append(path)
 
     plan["timeline"] = [{k: v for k, v in s.items() if k != "cues"} for s in segments]
-    plan["visuals"] = [{**v, "image": str(v["image"]) if v.get("image") else None} for v in visuals]
+    plan["visuals"] = [
+        {
+            **{key: value for key, value in visual.items() if key != "clip_frames_dir"},
+            "image": str(visual["image"]) if visual.get("image") else None,
+        }
+        for visual in visuals
+    ]
     plan["voice"] = {"provider": provider, "word_timing": "estimated" if any(
         a.estimated_timing for a in audio) else "measured"}
     spec_path = target / "daily_video_spec.json"

@@ -51,6 +51,7 @@ sources:
     type: rss
     url: https://huggingface.co/blog/feed.xml
     max_articles: 20
+    extract_articles: true
     content_type: article
 
   # ── Tech Media & Community ──────────────────────────────────────────────
@@ -72,6 +73,7 @@ sources:
     type: rss
     url: https://tldr.tech/api/rss/ai
     max_articles: 20
+    extract_articles: true
     content_type: newsletter
 
   - name: Lenny's Newsletter

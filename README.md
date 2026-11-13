@@ -4,8 +4,8 @@ An AI-powered automation system that collects AI news from configured feeds, res
 
 The current local workflow uses **Groq through its official OpenAI-compatible
 Chat Completions API** as its only configured LLM provider. No Gemini, Qwen, or
-DeepSeek fallback is configured. n8n Cloud orchestration, notifications, and
-video rendering are future integrations.
+DeepSeek fallback is configured. A self-hosted n8n workflow can automate the
+daily pipeline; optional delivery notifications remain user-configured.
 
 ## Project Overview
 
@@ -33,9 +33,9 @@ Every day, the system aims to:
 
 ### Pending
 
-- **Workflow Automation:** Connect the modular stages to n8n Cloud.
+- **Workflow Activation and Delivery:** The self-hosted n8n workflow and runner are included. Import and publish the workflow, then configure the success and failure delivery branches.
 - **Notifications:** Deliver reports through Email, Telegram, and WhatsApp.
-- **Video Rendering:** Turn generated scripts and scene specifications into video; no video-generation services are configured.
+- **Notifications:** Send reports through Email, Telegram, or WhatsApp after configuring the desired n8n nodes and credentials.
 
 ## Configured Data Sources
 
@@ -70,8 +70,8 @@ inaccessible pages use the RSS/source-summary fallback.
 Research grouping labels each topic as single-source or multi-source and
 retains every source URL. AI-generated claims are checked against the
 provided URLs before saving. The daily package contains two combined scripts,
-their story/source references, and content-quality metadata. Video rendering
-is not implemented; scene production remains a future stage.
+their story/source references, and content-quality metadata. The video
+pipeline renders dated MP4s for both programme types.
 
 ## Technology Stack
 
@@ -109,17 +109,13 @@ Groq Daily Research
     +------------------+
     |                  |
     v                  v
-PDF Generation     Future Video Rendering
+PDF Generation     Video Rendering
     |                  |
     +--------+---------+
              |
              v
-      Notifications
-             |
-     Email / Telegram
-
-       n8n Automation
-     Coordinates Pipeline
+      n8n Automation
+  schedules and routes results
 ```
 
 ## Project Structure
@@ -168,8 +164,8 @@ ai-daily-intelligence-agent/
 │   ├── run_research_report.py
 │   └── run_daily_programme.py
 │
-├── n8n/
-│   └── workflows/
+├── run_daily_pipeline.py
+├── n8n_daily_workflow.json
 │
 ├── tests/
 │
@@ -181,8 +177,8 @@ ai-daily-intelligence-agent/
 └── README.md
 ```
 
-The modules are callable independently for workflow automation; video
-rendering and notification modules are future stages.
+The modules are callable independently for workflow automation. Video
+rendering is implemented; notification delivery is configured in n8n.
 
 ## Development Roadmap
 
@@ -194,7 +190,7 @@ rendering and notification modules are future stages.
 - [x] **Phase 6 — Crawling and Research Grouping:** Extract permitted article content and prepare source-linked research groups.
 - [x] **Phase 7 — Daily Research and Programmes:** Generate one combined daily research package and the 1-minute and 3-minute scripts.
 - [x] **Phase 8 — Daily PDF Reporting:** Include the successful stories, source citations, and both combined scripts in one PDF.
-- [ ] **Phase 9 — n8n Integration:** Connect collection, research, report, and future video stages to n8n Cloud.
+- [x] **Phase 9 — n8n Integration:** Add a self-hosted n8n schedule workflow and a quota-aware daily runner for collection, research, PDF, and video generation. Import and publish the workflow to activate the schedule.
 - [ ] **Phase 10 — Notifications:** Integrate Email and Telegram notifications.
 - [x] **Phase 11 — Video Integration:** Plan scenes from exact daily narration, synthesize voiceovers, build SRT subtitles, and generate HD visual frames and video packages.
 
@@ -308,6 +304,58 @@ git diff --check
 
 Tests mock network and provider responses and never make live API requests.
 
+## n8n integration (self-hosted)
+
+The included workflow runs on this Windows PC and calls the local Python
+runner with n8n's Execute Command node. It does not require a hosted API.
+Use Node.js 20.19 through 24.x for current n8n releases.
+
+In PowerShell, from the project root, start n8n with Execute Command enabled:
+
+```powershell
+$env:NODES_EXCLUDE = "[]"
+npx n8n
+```
+
+Open <http://localhost:5678>, import `n8n_daily_workflow.json`, and run the
+workflow once manually. Confirm that the pipeline succeeds and creates the
+expected files. Then choose **Publish** to activate its daily 07:00 schedule
+(timezone `Asia/Kolkata`). The imported Execute Command uses this checkout's
+absolute project path; update that node's command if you move the project.
+
+Run the pipeline manually without video rendering:
+
+```powershell
+.venv\Scripts\python.exe run_daily_pipeline.py --skip-video
+```
+
+The runner calls `python -m src.run_daily_programme` once for collection,
+research, and the combined PDF, then calls `python -m src.generate_video` for
+each selected video type. It skips same-day research when
+`output/daily_programme.json` is already marked `SUCCESS` for today's local
+date; pass `--force` to spend quota and regenerate it. `--only-type` limits
+video rendering to one type. Every run writes a UTF-8 log under
+`output/pipeline_logs/` and prints one JSON result line for n8n:
+
+| Field | Meaning |
+|---|---|
+| `ok`, `stage`, `error` | Outcome, failing/current stage, and short error text |
+| `date`, `stories`, `headline` | Programme date and research summary |
+| `pdf` | Absolute path to the dated PDF |
+| `videos` | Absolute MP4 paths by programme type; empty when video is skipped |
+| `skipped_research` | Whether today's valid research package was reused |
+| `duration_seconds`, `log` | Elapsed time and absolute log path |
+
+The computer and n8n must both be running at 07:00 for the scheduled run.
+The workflow's success and failure branches are No Operation placeholders:
+configure a delivery node and its credentials in n8n if you want PDF/video
+delivery or failure alerts. The runner does not send external messages.
+
+The Execute Command node is disabled by default in n8n 2.x. The PowerShell
+environment setting above enables it for that n8n process. Keep this local
+n8n instance and its workflows accessible only to trusted users because
+Execute Command can run commands on the host.
+
 ## Important Development Principles
 
 - Work in small, testable steps.
@@ -337,9 +385,10 @@ Tests mock network and provider responses and never make live API requests.
 
 **Implemented:** RSS and Hugging Face collection, opt-in ethical extraction,
 deduplication, multi-source grouping, one combined Groq daily research
-request, combined 1- and 3-minute scripts, and one source-linked PDF.
+request, combined 1- and 3-minute scripts, one source-linked PDF, MP4 video
+rendering, and the self-hosted n8n workflow/runner for daily automation.
 
-**Pending:** n8n automation, Email/Telegram notifications, and video rendering.
+**Pending:** Importing and publishing the self-hosted n8n workflow, choosing delivery actions for its success/failure branches, and configuring Email/Telegram credentials if notifications are wanted.
 
 Article extraction is opt-in per source, currently configured only for Google DeepMind RSS, and is skipped when `robots.txt` cannot be checked or disallows the URL. A source's website terms still need to be reviewed before relying on extraction in production; an allow rule in `robots.txt` is not a legal permissions check.
 
@@ -422,4 +471,4 @@ Build a reliable AI-powered daily intelligence platform that makes it easier to 
 
 ---
 
-**Built with Python and Groq; n8n Cloud is a future orchestrator.**
+**Built with Python and Groq; self-hosted n8n schedules the daily pipeline.**

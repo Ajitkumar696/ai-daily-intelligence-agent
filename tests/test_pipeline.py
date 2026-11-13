@@ -1,3 +1,4 @@
+
 import json
 
 import pytest
@@ -7,7 +8,7 @@ import src.collect as collect
 import src.processing.json_storage as json_storage
 from src.collectors.collection_result import (
     CollectionResult,
-    CollectionStatus
+    CollectionStatus,
 )
 from src.configuration import SourceConfig
 
@@ -15,7 +16,7 @@ from src.configuration import SourceConfig
 def test_one_source_failure_does_not_stop_successful_sources(monkeypatch, capsys):
     sources = [
         SourceConfig("Failed feed", "rss", "https://example.com/broken", 5),
-        SourceConfig("Working feed", "rss", "https://example.com/good", 5)
+        SourceConfig("Working feed", "rss", "https://example.com/good", 5),
     ]
     article = {
         "source": "Working feed",
@@ -23,7 +24,7 @@ def test_one_source_failure_does_not_stop_successful_sources(monkeypatch, capsys
         "url": "https://example.com/article",
         "published": "",
         "summary": "Summary",
-        "collected_at": "2026-11-02T00:00:00+00:00"
+        "collected_at": "2026-11-02T00:00:00+00:00",
     }
     calls = []
 
@@ -41,7 +42,7 @@ def test_one_source_failure_does_not_stop_successful_sources(monkeypatch, capsys
     assert calls == ["Failed feed", "Working feed"]
     assert [result.status for result in results] == [
         CollectionStatus.FAILED,
-        CollectionStatus.SUCCESS
+        CollectionStatus.SUCCESS,
     ]
     summary = capsys.readouterr().out
     assert "Failed feed: FAILED (0 articles)" in summary
@@ -55,28 +56,29 @@ def test_extraction_enriches_article_without_replacing_rss_fields(monkeypatch):
         "rss",
         "https://deepmind.google/blog/rss.xml",
         5,
-        extract_articles=True
+        extract_articles=True,
     )
     article = {
         "source": "Google DeepMind",
         "title": "RSS title",
         "url": "https://deepmind.google/blog/example/",
         "published": "RSS date",
-        "summary": "RSS summary"
+        "summary": "RSS summary",
     }
     extracted = {"title": "Page title", "full_text": "Article body"}
+
     monkeypatch.setattr(
         collect,
         "collect_rss",
         lambda *args, **kwargs: CollectionResult.from_articles(
             source.name,
-            [article.copy()]
-        )
+            [article.copy()],
+        ),
     )
     monkeypatch.setattr(
         collect,
         "extract_article_content",
-        lambda url: extracted
+        lambda url: extracted,
     )
 
     result = collect.collect_all_sources([source])[0]
@@ -92,31 +94,29 @@ def test_extraction_enriches_article_without_replacing_rss_fields(monkeypatch):
 
 
 @pytest.mark.parametrize("extractor_result", [None, RuntimeError("blocked")])
-def test_extraction_failure_keeps_rss_metadata(
-    monkeypatch,
-    extractor_result
-):
+def test_extraction_failure_keeps_rss_metadata(monkeypatch, extractor_result):
     source = SourceConfig(
         "Google DeepMind",
         "rss",
         "https://deepmind.google/blog/rss.xml",
         5,
-        extract_articles=True
+        extract_articles=True,
     )
     article = {
         "source": source.name,
         "title": "RSS title",
         "url": "https://deepmind.google/blog/example/",
         "published": "RSS date",
-        "summary": "RSS summary"
+        "summary": "RSS summary",
     }
+
     monkeypatch.setattr(
         collect,
         "collect_rss",
         lambda *args, **kwargs: CollectionResult.from_articles(
             source.name,
-            [article.copy()]
-        )
+            [article.copy()],
+        ),
     )
 
     def extract(url):
@@ -143,35 +143,45 @@ def test_extraction_is_not_run_for_unconfigured_sources(monkeypatch):
             "Latent Space",
             "rss",
             "https://podcast.latent.space/feed.xml",
-            5
+            5,
         ),
         SourceConfig(
             "Hugging Face Papers",
             "api",
             "https://huggingface.co/api/daily_papers",
-            5
-        )
+            5,
+        ),
     ]
+
     monkeypatch.setattr(
         collect,
         "collect_rss",
         lambda source, **kwargs: CollectionResult.from_articles(
             source,
-            [{"source": source, "title": "Episode", "url": "https://podcast.latent.space/1"}]
-        )
+            [{
+                "source": source,
+                "title": "Episode",
+                "url": "https://podcast.latent.space/1",
+            }],
+        ),
     )
     monkeypatch.setattr(
         collect,
         "collect_huggingface_papers",
         lambda **kwargs: CollectionResult.from_articles(
             "Hugging Face Papers",
-            [{"source": "Hugging Face Papers", "title": "Paper", "url": "https://huggingface.co/papers/1", "summary": "API summary"}]
-        )
+            [{
+                "source": "Hugging Face Papers",
+                "title": "Paper",
+                "url": "https://huggingface.co/papers/1",
+                "summary": "API summary",
+            }],
+        ),
     )
     monkeypatch.setattr(
         collect,
         "extract_article_content",
-        lambda url: pytest.fail("Extraction should be disabled.")
+        lambda url: pytest.fail("Extraction should be disabled."),
     )
 
     results = collect.collect_all_sources(sources)
@@ -182,41 +192,45 @@ def test_extraction_is_not_run_for_unconfigured_sources(monkeypatch):
 
 def test_pipeline_saves_only_new_articles_then_updates_history(
     tmp_path,
-    monkeypatch
+    monkeypatch,
 ):
     output_file = tmp_path / "updates.json"
     history_file = tmp_path / "processed_history.json"
+
     history_file.write_text(
         json.dumps(["https://example.com/old"]),
-        encoding="utf-8"
+        encoding="utf-8",
     )
+
     old_article = {
         "source": "OpenAI",
         "title": "Already reported",
-        "url": "https://example.com/old"
+        "url": "https://example.com/old",
     }
     new_article = {
         "source": "OpenAI",
         "title": "New article",
         "url": "https://example.com/new",
-        "summary": "Summary"
+        "summary": "Summary",
     }
+
     collection_results = [
         CollectionResult.from_articles(
             "OpenAI",
-            [old_article, new_article]
+            [old_article, new_article],
         )
     ]
+
     monkeypatch.setattr(
         collect,
         "collect_all_sources",
-        lambda sources=None: collection_results
+        lambda sources=None: collection_results,
     )
 
     result = collect.run_pipeline(
         sources=[],
         output_file=output_file,
-        history_file=history_file
+        history_file=history_file,
     )
 
     assert result.saved_articles == [new_article]
@@ -224,63 +238,142 @@ def test_pipeline_saves_only_new_articles_then_updates_history(
     assert json.loads(output_file.read_text(encoding="utf-8")) == [new_article]
     assert json.loads(history_file.read_text(encoding="utf-8")) == [
         "https://example.com/new",
-        "https://example.com/old"
+        "https://example.com/old",
     ]
 
 
 def test_pipeline_writes_empty_output_for_empty_collection(tmp_path, monkeypatch):
     output_file = tmp_path / "updates.json"
     history_file = tmp_path / "processed_history.json"
+
     output_file.write_text('[{"old": true}]', encoding="utf-8")
     history_file.write_text(
         json.dumps(["https://example.com/old"]),
-        encoding="utf-8"
+        encoding="utf-8",
     )
+
     monkeypatch.setattr(
         collect,
         "collect_all_sources",
         lambda sources=None: [
             CollectionResult(
                 source="OpenAI",
-                status=CollectionStatus.EMPTY
+                status=CollectionStatus.EMPTY,
             )
-        ]
+        ],
     )
 
     result = collect.run_pipeline(
         sources=[],
         output_file=output_file,
-        history_file=history_file
+        history_file=history_file,
     )
 
     assert result.saved_articles == []
+
+    report = json.loads(
+        (tmp_path / "collection_report.json").read_text(encoding="utf-8")
+    )
+
+    assert report["configured_count"] == 1
+    assert report["zero_article_count"] == 1
+    assert report["sources"][0]["status"] == "EMPTY"
+    assert report["sources"][0]["article_count"] == 0
     assert json.loads(output_file.read_text(encoding="utf-8")) == []
     assert json.loads(history_file.read_text(encoding="utf-8")) == [
         "https://example.com/old"
     ]
 
 
+def test_collection_report_records_type_status_counts_and_errors():
+    sources = [
+        SourceConfig("Ready", "rss", "https://example.com/feed", 4),
+        SourceConfig("Broken", "twitter", "https://api.example.com", 4),
+        SourceConfig("Quiet", "api", "https://api.example.com/papers", 4),
+    ]
+
+    results = [
+        CollectionResult.from_articles(
+            "Ready",
+            [{"url": "https://example.com/1"}],
+        ),
+        CollectionResult.failed("Broken", "authentication required"),
+        CollectionResult(
+            source="Quiet",
+            status=CollectionStatus.EMPTY,
+        ),
+    ]
+
+    report = collect.build_collection_report(results, sources)
+
+    assert report["configured_count"] == 3
+    assert report["successful_count"] == 1
+    assert report["failed_count"] == 1
+    assert report["zero_article_count"] == 2
+
+    assert report["sources"] == [
+        {
+            "source": "Ready",
+            "collector_type": "rss",
+            "status": "SUCCESS",
+            "article_count": 1,
+            "error": None,
+            "articles": [
+                {
+                    "publisher": "Ready",
+                    "title": "",
+                    "url": "https://example.com/1",
+                    "canonical_url": "",
+                    "published": "",
+                    "content_source_type": "metadata_only",
+                    "summary": "",
+                }
+            ],
+        },
+        {
+            "source": "Broken",
+            "collector_type": "twitter",
+            "status": "FAILED",
+            "article_count": 0,
+            "error": "authentication required",
+            "articles": [],
+        },
+        {
+            "source": "Quiet",
+            "collector_type": "api",
+            "status": "EMPTY",
+            "article_count": 0,
+            "error": None,
+            "articles": [],
+        },
+    ]
+
+
 def test_pipeline_does_not_update_history_when_output_save_fails(
     tmp_path,
-    monkeypatch
+    monkeypatch,
 ):
     output_file = tmp_path / "updates.json"
     history_file = tmp_path / "processed_history.json"
+
     previous_output = '{"previous": "output"}'
     previous_history = json.dumps(["https://example.com/old"])
+
     output_file.write_text(previous_output, encoding="utf-8")
     history_file.write_text(previous_history, encoding="utf-8")
+
     article = {
         "source": "OpenAI",
         "title": "New article",
-        "url": "https://example.com/new"
+        "url": "https://example.com/new",
     }
+
     monkeypatch.setattr(
         collect,
         "collect_all_sources",
         lambda sources=None: [
             CollectionResult.from_articles("OpenAI", [article])
-        ]
+        ],
     )
 
     def fail_replace(source, destination):
@@ -292,7 +385,7 @@ def test_pipeline_does_not_update_history_when_output_save_fails(
         collect.run_pipeline(
             sources=[],
             output_file=output_file,
-            history_file=history_file
+            history_file=history_file,
         )
 
     assert output_file.read_text(encoding="utf-8") == previous_output

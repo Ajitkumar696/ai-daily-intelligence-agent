@@ -1,17 +1,18 @@
 """Motion-graphics frame renderer (Pillow). ``MotionRenderer.render_frame(t)``
 returns the 1920x1080 RGB frame for time ``t`` seconds of the video.
 
-Look: dark navy gradient, neon cyan + purple accents, white type, drifting
-particles, word-by-word headlines, news lower third, karaoke subtitles,
-animated transitions and a progress timeline. Everything drawn comes from the
-programme data; if a story has no supplied image an animated graphic is used.
+One-minute look: dark navy, cyan/purple accents, word-by-word headlines,
+karaoke subtitles and animated transitions. Three-minute look: quiet off-white
+editorial cards, charcoal type and restrained blue accents. Generated B-roll is
+optional; local graphics remain available for every story.
 """
 import math
 import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from urllib.parse import urlsplit
 
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageOps, ImageStat
 
 from .config import HEIGHT, WIDTH
 from .planner import clean_display_text
@@ -33,6 +34,23 @@ PANEL_W, PANEL_H = 800, 480
 SUB_TOP, SUB_BOTTOM = 812, 990
 TIMELINE_Y = 1040
 ENTER, EXIT = 0.55, 0.35
+
+
+def editorial_visual_concept(scene: Dict[str, Any], visual: Dict[str, Any]) -> str:
+    """Choose a restrained diagram from words present in this story's evidence."""
+    evidence = " ".join(str(value) for value in (
+        scene.get("headline", ""), scene.get("topic", ""),
+        " ".join(scene.get("key_points", []) or []),
+        " ".join(visual.get("keywords", []) or []),
+    )).casefold()
+    groups = (
+        ("evaluation", ("benchmark", "evaluation", "evaluator", "safety", "accuracy", "score")),
+        ("workflow", ("agent", "automation", "workflow", "robot", "task")),
+        ("hardware", ("chip", "gpu", "processor", "hardware", "silicon")),
+        ("model", ("model", "llm", "language", "architecture", "compute", "training")),
+        ("funding", ("funding", "investment", "acquisition", "million", "billion")),
+    )
+    return next((name for name, words in groups if any(word in evidence for word in words)), "story")
 
 
 def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -97,15 +115,18 @@ def _blend_paste(base: Image.Image, layer: Image.Image, pos: Tuple[int, int],
 class MotionRenderer:
     def __init__(self, plan: Dict[str, Any], visuals: List[Dict[str, Any]],
                  segments: List[Dict[str, Any]], total_seconds: float,
-                 voice_credit: str = ""):
+                 voice_credit: str = "", fps: int = 30):
         self.plan = plan
         self.visuals = visuals
         self.segments = segments
         self.total = total_seconds
         self.voice_credit = voice_credit
+        self.fps = max(int(fps), 1)
+        self.editorial = plan.get("programme_type") == "three_minute"
         self.date = str(plan.get("programme_date") or "")
         self._sprites: Dict[Any, Any] = {}
         self._images: Dict[str, Optional[Image.Image]] = {}
+        self._clip_frames: Dict[int, List[Path]] = {}
         self._cue_layout: Dict[int, Any] = {}
         self._rng_cache: Dict[str, Any] = {}
         self._build_static()
@@ -173,6 +194,8 @@ class MotionRenderer:
 
     def render_frame(self, t: float) -> Image.Image:
         seg = self.segment_at(t)
+        if self.editorial:
+            return self._render_editorial_frame(seg, t)
         base = (self.bg_plain if seg["type"] != "scene" else self.bg_header).copy()
         self._particles(base, t)
         if seg["type"] == "bumper":
@@ -183,6 +206,181 @@ class MotionRenderer:
             self._scene(base, seg, t)
             self._timeline(base, t)
         return base
+
+    def _render_editorial_frame(self, seg: Dict[str, Any], t: float) -> Image.Image:
+        """Quiet newsroom layout used only by the three-minute workflow."""
+        bg = (250, 250, 248)
+        ink = (31, 38, 46)
+        muted = (102, 112, 122)
+        blue = (40, 105, 170)
+        pale = (234, 239, 243)
+        image = Image.new("RGB", (WIDTH, HEIGHT), bg)
+        draw = ImageDraw.Draw(image)
+        draw.text((100, 48), "AI DAILY INTELLIGENCE", fill=ink, font=_font(30, True))
+        draw.text((100, 94), "TECHNOLOGY  /  DAILY BRIEFING", fill=blue, font=_font(19, True))
+        date_font = _font(24)
+        draw.text((WIDTH - 100 - draw.textlength(self.date, font=date_font), 57),
+                  self.date, fill=muted, font=date_font)
+        draw.line((100, 132, WIDTH - 100, 132), fill=(207, 214, 220), width=2)
+
+        if seg["type"] == "bumper":
+            draw.text((100, 330), "AI DAILY", fill=ink, font=_font(110, True))
+            draw.text((100, 470), "INTELLIGENCE", fill=blue, font=_font(88, True))
+            draw.text((106, 590), "Evidence-led reporting on the AI ecosystem", fill=muted, font=_font(32))
+            draw.rectangle((100, 655, 460, 663), fill=blue)
+        elif seg["type"] == "closing":
+            draw.text((100, 280), "That’s your AI briefing.", fill=ink, font=_font(82, True))
+            draw.text((104, 410), "Return to the daily report for source links and full context.",
+                      fill=muted, font=_font(32))
+            y = 520
+            for story in [s for s in self.plan.get("scenes", []) if s.get("kind") == "story"][:5]:
+                draw.ellipse((106, y + 12, 118, y + 24), fill=blue)
+                headline = clean_display_text(story.get("headline") or "")
+                draw.text((140, y), headline[:92], fill=ink, font=_font(28))
+                y += 58
+        else:
+            idx = seg["index"]
+            scene = self.plan["scenes"][idx]
+            visual = self.visuals[idx]
+            kind = scene.get("kind", "story")
+            kicker = "EDITOR’S NOTE" if kind == "intro" else (
+                "COLLECTION STATUS" if kind == "outro" else clean_display_text(
+                    scene.get("source_credit") or visual.get("category") or "AI NEWS"
+                ).upper()
+            )
+            draw.text((100, 174), kicker[:62], fill=blue, font=_font(22, True))
+            headline = clean_display_text(scene.get("headline") or scene.get("title") or "")
+            headline_lines = _wrap(draw, headline, _font(58, True), 835)
+            if len(headline_lines) > 4:
+                headline_lines = headline_lines[:4]
+                headline_lines[-1] = headline_lines[-1].rstrip(" .") + "…"
+            y = 226
+            for line in headline_lines:
+                draw.text((100, y), line, fill=ink, font=_font(58, True))
+                y += 72
+
+            points = [clean_display_text(p) for p in scene.get("key_points", []) if p]
+            if points:
+                support = points[0]
+                support_lines = _wrap(draw, support, _font(28), 800)[:4]
+                for line in support_lines:
+                    draw.text((104, max(y + 22, 520)), line, fill=muted, font=_font(28))
+                    y = max(y + 22, 520) + 40
+
+            panel = (1010, 185, 1820, 680)
+            draw.rounded_rectangle(panel, radius=10, fill=pale, outline=(217, 224, 230), width=2)
+            frame_dir = visual.get("clip_frames_dir")
+            frame_files = self._clip_frames.get(idx)
+            frame_path = None
+            if frame_dir:
+                if frame_files is None:
+                    frame_files = sorted(Path(frame_dir).glob("frame_*.jpg"))
+                    self._clip_frames[idx] = frame_files
+                frame_files = frame_files or []
+                if frame_files:
+                    local_time = max(0.0, t - seg["start"])
+                    frame_path = frame_files[int(local_time * self.fps) % len(frame_files)]
+            if frame_path:
+                try:
+                    with Image.open(frame_path) as clip_frame:
+                        fitted = ImageOps.fit(clip_frame.convert("RGB"), (806, 491), method=Image.Resampling.LANCZOS)
+                    if max(ImageStat.Stat(fitted).mean) < 4:
+                        frame_path = None
+                    else:
+                        image.paste(fitted, (1012, 187))
+                except (OSError, ValueError):
+                    frame_path = None
+            if not frame_path:
+                self._editorial_visual(draw, scene, visual, t - seg["start"], blue, ink, muted)
+
+            source = clean_display_text(scene.get("source_credit") or "")
+            url = (scene.get("source_urls") or [""])[0]
+            domain = urlsplit(str(url)).netloc.removeprefix("www.") if url else ""
+            credit = "  ·  ".join(part for part in (source, domain) if part)
+            if credit:
+                draw.text((100, 735), credit[:110], fill=muted, font=_font(21, True))
+
+            self._editorial_subtitle(image, seg, t, ink, blue)
+            scenes = [s for s in self.segments if s["type"] == "scene"]
+            if scenes:
+                start, end = scenes[0]["start"], scenes[-1]["end"]
+                x_end = 100 + int(1720 * _clamp((t - start) / max(end - start, 0.1)))
+                draw.rounded_rectangle((100, 1040, 1820, 1047), radius=3, fill=(222, 228, 233))
+                draw.rounded_rectangle((100, 1040, max(x_end, 102), 1047), radius=3, fill=blue)
+
+        # A short white dissolve at scene boundaries, with no neon wipe.
+        if seg["type"] == "scene":
+            local = t - seg["start"]
+            alpha = _clamp((0.28 - local) / 0.28)
+            if alpha > 0:
+                image = Image.blend(image, Image.new("RGB", image.size, bg), alpha)
+        return image
+
+    def _editorial_visual(self, draw, scene, visual, local_time, blue, ink, muted):
+        """Draw a story-specific, evidence-labelled diagram in the right panel."""
+        x0, y0, x1, y1 = 1012, 187, 1818, 676
+        concept = editorial_visual_concept(scene, visual)
+        keywords = [clean_display_text(word) for word in visual.get("keywords", []) if word]
+        headline_words = [word.strip(".,:;()") for word in
+                          clean_display_text(scene.get("headline", "")).split()]
+        label = next((word for word in keywords if len(word) > 2), "")
+        if not label:
+            label = next((word for word in headline_words if len(word) > 4), "STORY")
+        label = label[:22]
+        draw.text((x0 + 34, y0 + 26), concept.replace("_", " ").upper(), fill=blue, font=_font(18, True))
+        draw.text((x0 + 34, y0 + 58), label, fill=ink, font=_font(32, True))
+        # The repeated motion is tied to scene-local time so it resets with narration.
+        phase = (local_time * 0.55) % 1.0
+        if concept in ("evaluation", "funding"):
+            # Evidence cards and a progressing connector, without fabricated values.
+            labels = keywords[:3] or [label]
+            left, right = x0 + 52, x1 - 52
+            ys = [y0 + 180 + i * 76 for i in range(min(3, len(labels)))]
+            for i, (yy, text) in enumerate(zip(ys, labels)):
+                draw.rounded_rectangle((left, yy, right, yy + 48), radius=8,
+                                       fill=(255, 255, 255), outline=(205, 216, 225), width=2)
+                draw.ellipse((left + 15, yy + 16, left + 31, yy + 32), fill=blue if i == 0 else (150, 178, 199))
+                draw.text((left + 46, yy + 9), text[:30], fill=ink, font=_font(21, True))
+                draw.line((left + 24, yy + 48, left + 24, yy + 72), fill=(155, 181, 201), width=2)
+            pulse_x = left + int((right - left) * phase)
+            draw.ellipse((pulse_x - 5, ys[0] - 7, pulse_x + 5, ys[0] + 3), fill=blue)
+        elif concept in ("workflow", "hardware"):
+            labels = keywords[:3] or [label]
+            cy = y0 + 285
+            centers = [(x0 + 145 + i * 250, cy + (i % 2) * 24) for i in range(3)]
+            for i in range(len(centers) - 1):
+                draw.line((*centers[i], *centers[i + 1]), fill=(156, 180, 198), width=3)
+            for i, (center, text) in enumerate(zip(centers, labels)):
+                cx, yy = center
+                draw.rounded_rectangle((cx - 88, yy - 35, cx + 88, yy + 35), radius=14,
+                                       fill=(255, 255, 255), outline=blue if i == 0 else (180, 197, 210), width=3)
+                draw.text((cx - 72, yy - 12), text[:16], fill=ink, font=_font(18, True))
+            moving = centers[0][0] + int((centers[-1][0] - centers[0][0]) * phase)
+            draw.ellipse((moving - 7, cy - 7, moving + 7, cy + 7), fill=blue)
+        else:
+            # A distinct, animated typographic fallback when keywords are sparse.
+            words = keywords[:3] or [word for word in headline_words if len(word) > 3][:3] or ["STORY"]
+            for i, word in enumerate(words):
+                yy = y0 + 190 + i * 72
+                reveal = _clamp((local_time - i * 0.18) / 0.45)
+                draw.rectangle((x0 + 48, yy + 45, x0 + 48 + int(580 * reveal), yy + 49), fill=blue)
+                draw.text((x0 + 48, yy), word[:24], fill=ink if reveal > 0.2 else muted, font=_font(34, True))
+
+    def _editorial_subtitle(self, image: Image.Image, seg: Dict[str, Any], t: float,
+                            ink: Tuple[int, int, int], blue: Tuple[int, int, int]) -> None:
+        cues: List[Cue] = seg.get("cues") or []
+        cue = cue_at(cues, t) if cues else None
+        if cue is None:
+            return
+        draw = ImageDraw.Draw(image)
+        draw.rounded_rectangle((100, 850, 1820, 985), radius=8, fill=(255, 255, 255), outline=(210, 218, 225), width=2)
+        words = " ".join(word.word for word in cue.words)
+        lines = _wrap(draw, words, _font(34, True), 1620)[:2]
+        y = 890 if len(lines) == 1 else 870
+        for line in lines:
+            draw.text(((WIDTH - draw.textlength(line, font=_font(34, True))) / 2, y), line,
+                      fill=ink if active_word_index(cue, t) >= 0 else blue, font=_font(34, True))
+            y += 46
 
     # -------------------------------------------------------------- particles
     def _particles(self, base: Image.Image, t: float) -> None:
@@ -287,7 +485,7 @@ class MotionRenderer:
             ImageDraw.Draw(base).rectangle([(tx, 222 + h + 14), (tx + bar_w, 222 + h + 19)], fill=kcolor)
 
         self._panel(base, idx, scene, vis, px, 160, lt, dur, alpha, variant)
-        self._lower_third(base, idx, vis, lt, dur)
+        self._lower_third(base, idx, vis, scene, lt, dur)
         self._subtitles(base, seg, t)
         self._wipe(base, lt)
 
@@ -390,14 +588,15 @@ class MotionRenderer:
         _blend_paste(panel, card, (x0, y0), _rounded_mask((w, h), 22, 235), p)
 
     # ------------------------------------------------------------ lower third
-    def _lower_third(self, base, idx, vis, lt, dur):
-        source = vis.get("source")
+    def _lower_third(self, base, idx, vis, scene, lt, dur):
+        source = scene.get("source_credit") or vis.get("source")
         if not source or lt < 0.6:
             return
+        source = source if len(source) <= 100 else source[:97].rsplit(" ", 1)[0] + "..."
         p_in = ease_out((lt - 0.6) / 0.5)
         p_out = _clamp((dur - lt) / EXIT)
         alpha = min(p_in, p_out)
-        name = self._sprite(("src", idx), source, _font(34, True), WHITE)
+        name = self._sprite(("src", idx), source, _font(24, True), WHITE)
         tag = self._sprite(("srct", idx), "SOURCE", _font(22, True), (8, 12, 32))
         w = tag.w + 36 + name.w + 52
         layer = Image.new("RGB", (w, 66), (10, 16, 40))

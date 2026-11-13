@@ -47,6 +47,14 @@ class VideoConfig:
     scene_tail_seconds: float = 0.45
     bumper_seconds: float = 2.6
     closing_seconds: float = 3.4
+    higgsfield_enabled: bool = False
+    higgsfield_allow_paid: bool = False
+    higgsfield_api_key_id: str = field(default="", repr=False)
+    higgsfield_api_key_secret: str = field(default="", repr=False)
+    higgsfield_clip_seconds: int = 5
+    higgsfield_aspect_ratio: str = "16:9"
+    higgsfield_timeout: float = 600.0
+    higgsfield_max_clips: int = 3
 
     @property
     def has_elevenlabs_key(self) -> bool:
@@ -73,7 +81,17 @@ class VideoConfig:
             music_file=(env.get("VIDEO_MUSIC_FILE") or "").strip(),
             music_volume=min(max(_float(env.get("VIDEO_MUSIC_VOLUME"), 0.16), 0.0), 1.0),
             image_dir=(env.get("VIDEO_IMAGE_DIR") or "").strip(),
+            higgsfield_enabled=_flag(env.get("HIGGSFIELD_ENABLED"), False),
+            higgsfield_allow_paid=_flag(env.get("HIGGSFIELD_ALLOW_PAID"), False),
+            higgsfield_api_key_id=(env.get("HIGGSFIELD_API_KEY_ID") or "").strip(),
+            higgsfield_api_key_secret=(env.get("HIGGSFIELD_API_KEY_SECRET") or "").strip(),
+            higgsfield_clip_seconds=min(max(int(_float(env.get("HIGGSFIELD_CLIP_SECONDS"), 5)), 3), 15),
+            higgsfield_aspect_ratio=(env.get("HIGGSFIELD_ASPECT_RATIO") or "16:9").strip(),
+            higgsfield_timeout=max(_float(env.get("HIGGSFIELD_TIMEOUT"), 600.0), 1.0),
+            higgsfield_max_clips=min(max(int(_float(env.get("HIGGSFIELD_MAX_CLIPS"), 3)), 0), 10),
         )
+        if values["higgsfield_aspect_ratio"] not in {"16:9", "9:16", "1:1"}:
+            values["higgsfield_aspect_ratio"] = "16:9"
         values.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**values)
 

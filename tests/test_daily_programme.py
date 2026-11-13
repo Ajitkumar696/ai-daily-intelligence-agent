@@ -937,6 +937,8 @@ def test_groq_research_batches_validate_and_combine_all_selected_topics(tmp_path
         cache=SummaryCache(tmp_path / "cache.json"),
         programme_date=PROGRAMME_DATE,
     )
+    collection_report = {"configured_count": 14, "sources": []}
+    programme["collection_report"] = collection_report
     validated = validate_daily_programme_record(programme)
 
     assert len(client.story_prompts) == 2
@@ -947,6 +949,7 @@ def test_groq_research_batches_validate_and_combine_all_selected_topics(tmp_path
     ] == [3, 1]
     assert len(client.script_prompts) == 1
     assert len(validated["stories"]) == 4
+    assert validated["collection_report"] == collection_report
     assert len(programme["llm_diagnostics"]) == 3
     assert all(item["provider"] == "groq" for item in programme["llm_diagnostics"])
 

@@ -195,6 +195,7 @@ def _multi_story_programme():
                 "key_facts": [{"statement": "Independent evaluators help ensure models are assessed fairly."}],
                 "why_it_matters": "Fairer assessment.",
                 "source_urls": ["https://www.anthropic.com/news/evaluators"],
+                "sources": [{"publisher": "Anthropic", "url": "https://www.anthropic.com/news/evaluators"}],
             },
             {
                 "story_id": "s2", "topic": "Efficiency",
@@ -203,6 +204,7 @@ def _multi_story_programme():
                 "key_facts": [{"statement": "DeepMem architecture reduces compute while keeping fidelity."}],
                 "why_it_matters": "Cheaper deployment.",
                 "source_urls": ["https://huggingface.co/papers/1"],
+                "sources": [{"publisher": "Hugging Face Papers", "url": "https://huggingface.co/papers/1"}],
             },
         ],
         "programmes": {"one_minute": {
@@ -231,9 +233,86 @@ def test_scenes_follow_the_story_being_narrated():
     first, second = story_scenes[0], story_scenes[-1]
     assert "Anthropic" in first["headline"] and "Anthropic" in first["narration"]
     assert "DeepMem" in second["headline"] and "DeepMem" in second["narration"]
+    assert first["story_id"] == "s1" and "Anthropic" in first["source_credit"]
+    assert second["story_id"] == "s2" and "Hugging Face Papers" in second["source_credit"]
     # a scene never mixes sentences about two different stories
     for scene in story_scenes:
         assert not ("Anthropic" in scene["narration"] and "DeepMem" in scene["narration"])
+
+
+def test_three_minute_scenes_keep_story_publisher_and_domain_together():
+    programme = _multi_story_programme()
+    programme["programmes"]["three_minute"] = {
+        "title": "Full bulletin", "duration_seconds": 180,
+        "narration": (
+            "Today, Anthropic published an update on independent evaluators. "
+            "Independent evaluators help ensure models are assessed fairly. "
+            "DeepMem architecture reduces language model compute dramatically. "
+            "DeepMem keeps fidelity while cutting compute for deployment. "
+            "That wraps up your briefing."
+        ),
+        "story_ids": ["s1", "s2"], "source_urls": [],
+    }
+    plan = plan_video_scenes(programme, "three_minute")
+    scenes = [scene for scene in plan["scenes"] if scene["kind"] == "story"]
+
+    assert scenes[0]["story_id"] == "s1"
+    assert "Anthropic" in scenes[0]["source_credit"]
+    assert "anthropic.com" in scenes[0]["source_credit"]
+    assert scenes[-1]["story_id"] == "s2"
+    assert "Hugging Face Papers" in scenes[-1]["source_credit"]
+    assert "huggingface.co" in scenes[-1]["source_credit"]
+
+
+def test_three_minute_video_keeps_pdf_programme_stories_when_collection_data_is_attached(sample_programme):
+    programme = sample_programme
+    programme["source_articles"] = [{
+        "source": "Unrelated Publisher", "title": "Unrelated model launch",
+        "url": "https://unrelated.example/story",
+        "summary": "An unrelated product announcement with collected evidence.",
+    }]
+    plan = plan_video_scenes(programme, "three_minute")
+
+    stories = [scene for scene in plan["scenes"] if scene["kind"] == "story"]
+    assert stories and {scene["story_id"] for scene in stories} == {"story-001"}
+    assert all("unrelated" not in scene["narration"].lower() for scene in stories)
+    assert stories[0]["source_urls"] == ["https://example.com/paper/001"]
+
+
+def test_three_minute_duration_guard_rejects_out_of_range_audio_but_leaves_one_minute_alone():
+    from src.video.pipeline import validate_target_duration
+    from src.video.render import RenderError
+
+    validate_target_duration({"programme_type": "three_minute", "target_duration_seconds": 180}, 194)
+    validate_target_duration({"programme_type": "one_minute", "target_duration_seconds": 60}, 220)
+    with pytest.raises(RenderError, match="renders to 222.8s"):
+        validate_target_duration(
+            {"programme_type": "three_minute", "target_duration_seconds": 180}, 222.8
+        )
+
+
+def test_three_minute_audio_fit_is_local_and_rescales_subtitle_word_times(tmp_path, monkeypatch):
+    from src.video import pipeline, tts
+    from src.video.timing import WordTiming
+
+    original = tts.write_silence(tmp_path / "scene.wav", 190)
+    clip = tts.SceneAudio(original, 190, [WordTiming("Briefing.", 1, 2)], "Windows speech", True)
+
+    def fake_ffmpeg(command, _label):
+        source = Path(command[command.index("-i") + 1])
+        output = Path(command[-1])
+        tempo = float(command[command.index("-filter:a") + 1].split("=")[1])
+        tts.write_silence(output, tts.wav_seconds(source) / tempo)
+
+    monkeypatch.setattr(pipeline.render, "run_ffmpeg", fake_ffmpeg)
+    fitted = pipeline.fit_three_minute_audio(
+        [clip], _test_config(), tmp_path / "work", "ffmpeg", target_seconds=180,
+    )
+
+    assert fitted[0].path != original
+    assert fitted[0].duration == pytest.approx(174, abs=0.05)
+    assert fitted[0].words[0].start == pytest.approx(1 / (190 / 174))
+    assert fitted[0].words[0].end == pytest.approx(2 / (190 / 174))
 
 
 def test_clean_display_text_replaces_glyphs_fonts_cannot_draw():
@@ -424,3 +503,289 @@ def test_powershell_quote_doubles_every_kind_of_apostrophe():
     quoted = _ps_quote("‘a‚‛")
     assert quoted == "'" + "''" + "a" + "''" + "''" + "'"
     assert not any(ch in quoted for ch in "‘’‚‛")
+
+
+def _source_programme(source_count=12):
+    sources = [f"Publisher {index}" for index in range(source_count)]
+    records = [
+        {"source": name, "status": "SUCCESS", "article_count": 1}
+        for name in sources
+    ]
+    records.extend([
+        {"source": "X / Twitter", "status": "FAILED", "article_count": 0},
+        {"source": "Product Hunt", "status": "FAILED", "article_count": 0},
+    ])
+    articles = [
+        {
+            "source": name,
+            "publisher": name,
+            "title": f"Publisher {index} announces a new AI research model",
+            "url": f"https://example.com/story/{index}",
+            "summary": (
+                f"Publisher {index} describes a new research model for developers. "
+                "The collected report says the release includes downloadable weights "
+                "and benchmark results for practical evaluation."
+            ),
+            "content_source_type": "full_article",
+        }
+        for index, name in enumerate(sources)
+    ]
+    return {
+        "programme_date": "2026-11-11",
+        "stories": [],
+        "source_articles": articles,
+        "collection_report": {"sources": records},
+        "programmes": {
+            "one_minute": {
+                "title": "One minute",
+                "duration_seconds": 60,
+                "narration": "Welcome. A source article follows. Thanks for listening.",
+            },
+            "three_minute": {
+                "title": "Daily AI briefing",
+                "duration_seconds": 180,
+                "narration": "Legacy narration stays available.",
+            },
+        },
+    }
+
+
+def test_three_minute_source_editorial_coverage_and_failed_disclosure():
+    plan = plan_video_scenes(_source_programme(), "three_minute")
+    stories = [scene for scene in plan["scenes"] if scene["kind"] == "story"]
+
+    assert len(stories) == 12
+    assert {scene["source_credit"] for scene in stories} == {
+        f"Publisher {index}" for index in range(12)
+    }
+    assert all(scene["source_urls"] for scene in stories)
+    assert {
+        scene["source_credit"]: scene["source_urls"][0]
+        for scene in stories
+    } == {
+        f"Publisher {index}": f"https://example.com/story/{index}"
+        for index in range(12)
+    }
+    assert all(scene["headline"] in scene["narration"] for scene in stories)
+    assert all(scene["source_credit"] in scene["narration"] for scene in stories)
+    assert any("X / Twitter and Product Hunt were unavailable" in scene["narration"]
+               for scene in plan["scenes"])
+    assert "X / Twitter" not in [scene["source_credit"] for scene in stories]
+    assert 360 <= plan["word_count"] <= 420
+    assert plan["actual_duration_seconds"] == 180
+
+
+def test_three_minute_deduplicates_articles_and_discloses_sources_without_content():
+    programme = _source_programme(source_count=2)
+    duplicate = dict(programme["source_articles"][0], url="https://example.com/duplicate")
+    programme["source_articles"].append(duplicate)
+    programme["collection_report"]["sources"].append(
+        {"source": "Quiet Source", "status": "SUCCESS", "article_count": 1}
+    )
+    plan = plan_video_scenes(programme, "three_minute")
+    stories = [scene for scene in plan["scenes"] if scene["kind"] == "story"]
+
+    assert len(stories) == 2
+    assert len({scene["headline"] for scene in stories}) == 2
+    assert any("Quiet Source" in scene["narration"] for scene in plan["scenes"])
+    assert plan["source_coverage"]["sources_without_usable_coverage"] == ["Quiet Source"]
+
+
+def test_three_minute_handles_nested_article_content_and_rejects_headline_only():
+    programme = _source_programme(source_count=2)
+    programme["source_articles"][0]["summary"] = [
+        {"content": "Collected nested evidence describes a model release."},
+        "The article explains the benchmark and intended use.",
+    ]
+    programme["source_articles"][1]["summary"] = None
+    programme["source_articles"][1]["extracted_content"] = {"body": [
+        {"text": "Extracted evidence describes a research result."}
+    ]}
+    programme["source_articles"].append({
+        "source": "Publisher 0", "title": "Headline without collected evidence",
+        "url": "https://example.com/headline-only",
+    })
+    plan = plan_video_scenes(programme, "three_minute")
+    stories = [scene for scene in plan["scenes"] if scene["kind"] == "story"]
+
+    assert len(stories) == 2
+    assert "Collected nested evidence" in stories[0]["narration"]
+    assert "Extracted evidence" in stories[1]["narration"]
+    assert all("Headline without collected evidence" not in scene["narration"]
+               for scene in stories)
+
+
+def test_editorial_white_visual_is_three_minute_only():
+    from src.video.motion import MotionRenderer
+
+    programme = _source_programme(source_count=1)
+    three_plan = plan_video_scenes(programme, "three_minute")
+    one_plan = plan_video_scenes(programme, "one_minute")
+    segment = [{"type": "scene", "index": 0, "start": 0.0, "end": 12.0, "cues": []}]
+    three = MotionRenderer(three_plan, [{} for _ in three_plan["scenes"]], segment, 12)
+    one = MotionRenderer(one_plan, [{} for _ in one_plan["scenes"]], segment, 12)
+
+    assert three.render_frame(1).getpixel((0, 0)) == (250, 250, 248)
+    assert max(one.render_frame(1).getpixel((0, 0))) < 60
+
+
+def test_editorial_visual_concepts_follow_story_evidence():
+    from src.video.motion import editorial_visual_concept
+
+    assert editorial_visual_concept(
+        {"headline": "Benchmark evaluates model safety"}, {"keywords": ["Benchmark"]}
+    ) == "evaluation"
+    assert editorial_visual_concept(
+        {"headline": "New robot agent automates workflow"}, {"keywords": ["robot"]}
+    ) == "workflow"
+    assert editorial_visual_concept(
+        {"headline": "Chip processor hardware update"}, {"keywords": ["processor"]}
+    ) == "hardware"
+
+
+def test_editorial_typography_fallback_is_story_specific_not_placeholder():
+    from PIL import Image, ImageDraw
+    from src.video.motion import MotionRenderer
+
+    renderer = MotionRenderer({"programme_type": "three_minute", "scenes": []}, [], [], 1)
+    first = Image.new("RGB", (1920, 1080), (234, 239, 243))
+    second = first.copy()
+    renderer._editorial_visual(ImageDraw.Draw(first), {"headline": "Novel discovery"},
+                               {"keywords": ["Orion"]}, 1.0, (40, 105, 170),
+                               (31, 38, 46), (102, 112, 122))
+    renderer._editorial_visual(ImageDraw.Draw(second), {"headline": "New reasoning"},
+                               {"keywords": ["Vector"]}, 1.0, (40, 105, 170),
+                               (31, 38, 46), (102, 112, 122))
+    assert first.crop((1012, 187, 1818, 676)).tobytes() != second.crop((1012, 187, 1818, 676)).tobytes()
+
+
+def test_three_minute_pipeline_falls_back_locally_without_higgsfield_key(tmp_path):
+    programme = _source_programme()
+    result = generate_daily_video(
+        programme,
+        programme_type="three_minute",
+        output_dir=tmp_path / "videos",
+        render_mp4_if_possible=False,
+        config=_test_config(),
+        providers=fake_providers(),
+        log=lambda *_: None,
+    )
+
+    spec = json.loads(result["spec_path"].read_text(encoding="utf-8"))
+    assert result["status"] == "SUCCESS_VIDEO_PACKAGE_READY"
+    assert 150 <= result["duration_seconds"] <= 190
+    assert all("clip_path" not in visual for visual in spec["visuals"])
+    assert len(result["frames"]) == result["scene_count"]
+
+
+def test_higgsfield_prompt_uses_article_evidence_and_excludes_fake_claims():
+    from src.video.higgsfield import build_story_prompt
+
+    prompt = build_story_prompt({
+        "headline": "Research team publishes model evaluation",
+        "key_points": ["Collected article reports a new benchmark."],
+    })
+
+    assert "model evaluation" in prompt
+    assert "new benchmark" in prompt
+    assert "no text, logos" in prompt
+    assert "news footage" not in prompt.lower()
+
+
+def test_higgsfield_mocked_submission_result_and_cache(tmp_path):
+    from src.video.higgsfield import MODEL_ID, generate_story_clip
+
+    config = _test_config(
+        higgsfield_enabled=True,
+        higgsfield_allow_paid=True,
+        higgsfield_api_key_id="test-id",
+        higgsfield_api_key_secret="test-secret",
+        higgsfield_clip_seconds=5,
+        higgsfield_timeout=10,
+    )
+    calls = []
+
+    class Client:
+        def subscribe(self, model, arguments):
+            calls.append((model, arguments))
+            return {"video": {"url": "https://cdn.example.com/generated.mp4"}}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size):
+            assert chunk_size > 0
+            yield b"mocked-video-bytes"
+
+    def downloader(url, **kwargs):
+        assert url == "https://cdn.example.com/generated.mp4"
+        return Response()
+
+    scene = {"headline": "New model benchmark", "key_points": ["Collected evidence explains results."]}
+    clip, warning = generate_story_clip(
+        scene, config, tmp_path,
+        client_factory=lambda **kwargs: Client(), downloader=downloader,
+    )
+    cached, cached_warning = generate_story_clip(
+        scene, config, tmp_path,
+        client_factory=lambda **kwargs: pytest.fail("Cached clip must not be regenerated."),
+        downloader=downloader,
+    )
+
+    assert warning == cached_warning == ""
+    assert clip == cached and clip.read_bytes() == b"mocked-video-bytes"
+    assert len(calls) == 1 and calls[0][0] == MODEL_ID
+    assert calls[0][1]["sound"] == "off"
+    assert calls[0][1]["duration"] == 5
+
+
+def test_higgsfield_missing_credentials_and_unapproved_calls_fall_back(tmp_path):
+    from src.video.higgsfield import generate_story_clip, generate_story_clips
+
+    scene = {"headline": "Evidence based article", "key_points": ["Collected source summary."]}
+    no_key = _test_config(higgsfield_enabled=True, higgsfield_allow_paid=True)
+    clip, warning = generate_story_clip(
+        scene, no_key, tmp_path,
+        client_factory=lambda **kwargs: pytest.fail("No key means no API call."),
+    )
+    assert clip is None and "credentials" in warning
+
+    config = _test_config(higgsfield_enabled=True, higgsfield_allow_paid=False)
+    plan = {"programme_type": "three_minute", "scenes": [{"kind": "story", **scene}]}
+    clips, warnings = generate_story_clips(
+        plan, config, tmp_path,
+        client_factory=lambda **kwargs: pytest.fail("Unapproved generation must not call the API."),
+    )
+    assert clips == [None]
+    assert warnings and "not approved" in warnings[0]
+
+
+def test_higgsfield_api_failure_falls_back_without_exposing_credentials(tmp_path):
+    from src.video.higgsfield import generate_story_clip
+
+    config = _test_config(
+        higgsfield_enabled=True,
+        higgsfield_allow_paid=True,
+        higgsfield_api_key_id="sensitive-id",
+        higgsfield_api_key_secret="sensitive-secret",
+    )
+
+    class BrokenClient:
+        def subscribe(self, *args, **kwargs):
+            raise RuntimeError("request failed with sensitive-secret")
+
+    clip, warning = generate_story_clip(
+        {"headline": "A reported model launch", "key_points": ["Collected article evidence."]},
+        config, tmp_path, client_factory=lambda **kwargs: BrokenClient(),
+    )
+
+    assert clip is None
+    assert "RuntimeError" in warning
+    assert "sensitive-secret" not in warning
+
+
+def test_asia_kolkata_zoneinfo_is_available():
+    from zoneinfo import ZoneInfo
+
+    assert ZoneInfo("Asia/Kolkata").key == "Asia/Kolkata"
